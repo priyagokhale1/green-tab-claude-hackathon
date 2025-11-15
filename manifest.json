@@ -13,13 +13,15 @@
   "permissions": [
     "tabs",
     "activeTab",
-    "storage"
+    "storage",
+    "identity"
   ],
   "host_permissions": [
     "http://*/*",
     "https://*/*",
     "https://api.thegreenwebfoundation.org/*",
     "https://api.websitecarbon.com/*",
-    "https://api.anthropic.com/*"
+    "https://api.anthropic.com/*",
+    "https://taaadgsnajjsmpidtusz.supabase.co/*"
   ]
 }

@@ -10,8 +10,43 @@ const WH_TO_WATER = 0.001; // Liters per Wh (average, varies by region)
 // 1. Get your API key from https://console.anthropic.com/
 // 2. Set CLAUDE_API_KEY below (for production, use secure storage/encryption)
 // 3. If null, the extension will use local fallback calculations
-const CLAUDE_API_KEY = null; // Set to your API key if you want to use Claude API
+// TEMPORARILY DISABLED FOR DEBUGGING
+const CLAUDE_API_KEY = null; // Disabled to debug sign-in issues
 const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
+
+// Supabase/Backend configuration
+// Set these values when you set up your backend
+const SUPABASE_URL = 'https://taaadgsnajjsmpidtusz.supabase.co'; // e.g., 'https://your-project.supabase.co'
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhYWFkZ3NuYWpqc21waWR0dXN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMyMDk5ODEsImV4cCI6MjA3ODc4NTk4MX0.QKFSl_WlrGVT8Wp3RsJWrqOC3WyEPmCi54xIinydBns'; // e.g., 'your-anon-key-here'
+// If these are empty, authentication will be disabled
+
+// Chrome Storage Adapter for Supabase
+// This allows Supabase sessions to persist across popup/service worker restarts
+const chromeStorageAdapter = {
+  getItem: (key) => {
+    return new Promise((resolve) => {
+      chrome.storage.local.get([key], (result) => {
+        resolve(result[key] ?? null);
+      });
+    });
+  },
+  
+  setItem: (key, value) => {
+    return new Promise((resolve) => {
+      chrome.storage.local.set({ [key]: value }, () => {
+        resolve();
+      });
+    });
+  },
+  
+  removeItem: (key) => {
+    return new Promise((resolve) => {
+      chrome.storage.local.remove([key], () => {
+        resolve();
+      });
+    });
+  },
+};
 
 // Cache for equivalencies to avoid too many API calls
 let equivalencyCache = new Map();
@@ -25,6 +60,733 @@ let isEstimateValue = false;
 // Store last time for smooth updates
 let lastTimeSpent = 0;
 let lastUpdateTime = Date.now();
+
+// Authentication state
+let authUser = null;
+let supabaseClient = null;
+
+// Initialize Supabase client with Chrome storage adapter
+// This ensures sessions persist across popup/service worker restarts
+function initSupabaseClient() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return null;
+  }
+  
+  // Check if Supabase is available (from CDN)
+  let supabaseLib = null;
+  
+  // Try window.supabase first (CDN usually attaches it here)
+  if (typeof window !== 'undefined' && window.supabase) {
+    supabaseLib = window.supabase;
+  } 
+  // Try global supabase
+  else if (typeof supabase !== 'undefined') {
+    supabaseLib = supabase;
+  }
+  
+  if (supabaseLib && supabaseLib.createClient) {
+    try {
+      // Create client with Chrome storage adapter for persistence
+      const client = supabaseLib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: {
+          persistSession: true,
+          storage: chromeStorageAdapter,
+          autoRefreshToken: true,
+        },
+      });
+      console.log('✓ Supabase client created with Chrome storage adapter');
+      return client;
+    } catch (error) {
+      console.error('Error creating Supabase client:', error);
+      return null;
+    }
+  }
+  
+  console.warn('Supabase client not available. Make sure the CDN script is loaded before popup.js');
+  return null;
+}
+
+// Check authentication status using Supabase session
+// This uses Supabase's built-in session management with Chrome storage
+async function checkAuthStatus(retryCount = 0, maxRetries = 3) {
+  try {
+    // If Supabase client is available, use its session management
+    if (supabaseClient && supabaseClient.auth) {
+      console.log(`checkAuthStatus: Using Supabase session (attempt ${retryCount + 1}/${maxRetries + 1})`);
+      
+      const { data: { session }, error } = await supabaseClient.auth.getSession();
+      
+      if (error) {
+        console.error('checkAuthStatus: Supabase session error:', error);
+        authUser = null;
+        return false;
+      }
+      
+      if (session && session.user) {
+        // Extract user info from Supabase session
+        authUser = {
+          id: session.user.id,
+          email: session.user.email,
+          name: session.user.user_metadata?.full_name || 
+                session.user.user_metadata?.name || 
+                session.user.email?.split('@')[0],
+          avatar: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || null
+        };
+        console.log('checkAuthStatus: ✓ User found via Supabase session:', {
+          id: authUser.id,
+          email: authUser.email,
+          name: authUser.name
+        });
+        return true;
+      } else {
+        console.log('checkAuthStatus: ✗ No Supabase session found');
+        authUser = null;
+        return false;
+      }
+    }
+    
+    // Fallback: Check manual storage (for backward compatibility)
+    console.log(`checkAuthStatus: Checking chrome.storage (fallback, attempt ${retryCount + 1}/${maxRetries + 1})`);
+    
+    const [syncResult, localResult] = await Promise.all([
+      chrome.storage.sync.get(['authUser', 'authToken', 'refreshToken']),
+      chrome.storage.local.get(['authUser', 'authToken', 'refreshToken'])
+    ]);
+    
+    console.log('checkAuthStatus: sync storage keys:', Object.keys(syncResult));
+    console.log('checkAuthStatus: local storage keys:', Object.keys(localResult));
+    
+    let result = null;
+    if (localResult.authUser && localResult.authToken) {
+      result = localResult;
+      console.log('checkAuthStatus: Found auth data in local storage (fallback)');
+    } else if (syncResult.authUser && syncResult.authToken) {
+      result = syncResult;
+      console.log('checkAuthStatus: Found auth data in sync storage (fallback)');
+    }
+    
+    if (result && result.authUser && result.authToken) {
+      authUser = result.authUser;
+      console.log('checkAuthStatus: ✓ User found (fallback):', {
+        id: authUser.id,
+        email: authUser.email,
+        name: authUser.name
+      });
+      return true;
+    } else {
+      // Retry if not found and we haven't exceeded max retries
+      if (retryCount < maxRetries) {
+        const delay = (retryCount + 1) * 500;
+        console.log(`checkAuthStatus: ✗ No user found, retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return checkAuthStatus(retryCount + 1, maxRetries);
+      }
+      
+      console.log('checkAuthStatus: ✗ No user found after', maxRetries + 1, 'attempts');
+      authUser = null;
+      return false;
+    }
+  } catch (error) {
+    console.error('Error checking auth status:', error);
+    
+    if (retryCount < maxRetries) {
+      const delay = (retryCount + 1) * 500;
+      console.log(`checkAuthStatus: Error occurred, retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return checkAuthStatus(retryCount + 1, maxRetries);
+    }
+    
+    authUser = null;
+    return false;
+  }
+}
+
+// Sign in with Google using OAuth
+async function signInWithGoogle() {
+  console.log('=== signInWithGoogle STARTED ===');
+  
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    alert('Authentication is not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY in popup.js');
+    return;
+  }
+
+  try {
+    // Get extension redirect URL (Chrome requires this to be configured in Google Console)
+    const extensionRedirectUrl = chrome.identity.getRedirectURL();
+    console.log('Extension redirect URL:', extensionRedirectUrl);
+    
+    // For Chrome extensions: use the extension redirect URL
+    // Then exchange the code with Supabase to get tokens
+    const supabaseCallbackUrl = `${SUPABASE_URL}/auth/v1/callback`;
+    console.log('Supabase callback URL:', supabaseCallbackUrl);
+    
+    // Use extension redirect URL for Chrome OAuth flow
+    // We'll handle the callback and exchange with Supabase
+    const authUrl = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(extensionRedirectUrl)}&apikey=${SUPABASE_ANON_KEY}`;
+    console.log('Full Auth URL:', authUrl);
+    
+    // Launch OAuth flow
+    console.log('Launching OAuth flow...');
+    let responseUrl;
+    try {
+      responseUrl = await new Promise((resolve, reject) => {
+        chrome.identity.launchWebAuthFlow(
+          {
+            url: authUrl,
+            interactive: true
+          },
+          (callbackUrl) => {
+            const error = chrome.runtime.lastError;
+            if (error) {
+              const errorMsg = error.message || String(error);
+              console.error('=== OAuth Flow Error ===');
+              console.error('Error message:', errorMsg);
+              console.error('Full error object:', error);
+              
+              // Handle specific error cases
+              if (errorMsg.includes('Authorization page could not be loaded') || errorMsg.includes('could not be loaded')) {
+                const helpfulMsg = `OAuth Configuration Error:\n\nThe extension redirect URL must be configured in TWO places:\n\n1. Google Cloud Console:\n   - Go to APIs & Services > Credentials\n   - Edit your OAuth 2.0 Client\n   - Add to "Authorized redirect URIs":\n     ${extensionRedirectUrl}\n\n2. Supabase Dashboard:\n   - Go to Authentication > URL Configuration\n   - Add to "Redirect URLs":\n     ${extensionRedirectUrl}\n\nSee FIX_REDIRECT_URI_MISMATCH.md for detailed instructions.`;
+                console.error('=== OAuth Configuration Required ===');
+                console.error('Extension Redirect URL:', extensionRedirectUrl);
+                console.error('This URL must be configured in both Google Cloud Console and Supabase');
+                alert(helpfulMsg);
+                reject(new Error(errorMsg));
+              } else {
+                reject(new Error(errorMsg));
+              }
+            } else if (!callbackUrl) {
+              console.error('OAuth flow returned empty URL');
+              reject(new Error('OAuth flow completed but no callback URL received'));
+            } else {
+              console.log('✓ OAuth flow completed successfully');
+              resolve(callbackUrl);
+            }
+          }
+        );
+      });
+    } catch (flowError) {
+      console.error('OAuth flow promise rejected:', flowError);
+      throw flowError;
+    }
+
+    // Extract tokens from response URL
+    console.log('=== OAuth Callback Received ===');
+    console.log('OAuth response URL:', responseUrl);
+    console.log('OAuth response URL length:', responseUrl?.length || 0);
+    
+    if (!responseUrl) {
+      throw new Error('No response URL received from OAuth flow');
+    }
+    
+    // Check if response URL contains Supabase callback (might redirect to extension URL)
+    let accessToken = null;
+    let refreshToken = null;
+    let finalCallbackUrl = responseUrl;
+    
+    // If response URL is the extension redirect URL, we need to extract from fragment
+    // Supabase might put tokens in URL fragment or query params
+    try {
+      const url = new URL(responseUrl);
+      
+      // Check hash/fragment first (most common for OAuth)
+      if (url.hash && url.hash.length > 1) {
+        const hash = url.hash.substring(1);
+        const hashParams = new URLSearchParams(hash);
+        accessToken = hashParams.get('access_token') || hashParams.get('#access_token');
+        refreshToken = hashParams.get('refresh_token');
+        
+        // Also check for URL-encoded fragments
+        if (!accessToken) {
+          const decoded = decodeURIComponent(hash);
+          const decodedParams = new URLSearchParams(decoded);
+          accessToken = decodedParams.get('access_token');
+          refreshToken = decodedParams.get('refresh_token');
+        }
+      }
+      
+      // Check query parameters as fallback
+      if (!accessToken && url.search) {
+        const searchParams = new URLSearchParams(url.search);
+        accessToken = searchParams.get('access_token');
+        refreshToken = searchParams.get('refresh_token');
+      }
+      
+      // Check if URL contains Supabase callback (redirected back from Supabase)
+      if (!accessToken && (url.hostname.includes('supabase.co') || url.pathname.includes('/auth/v1/callback'))) {
+        // Supabase callback - tokens might be in different format
+        const allParams = new URLSearchParams(url.search + url.hash.substring(1));
+        accessToken = allParams.get('access_token');
+        refreshToken = allParams.get('refresh_token');
+      }
+    } catch (urlError) {
+      console.error('Error parsing OAuth URL:', urlError);
+      // Try manual parsing as last resort
+      const match = responseUrl.match(/[#&]access_token=([^&]*)/);
+      if (match) {
+        accessToken = decodeURIComponent(match[1]);
+      }
+      const refreshMatch = responseUrl.match(/[#&]refresh_token=([^&]*)/);
+      if (refreshMatch) {
+        refreshToken = decodeURIComponent(refreshMatch[1]);
+      }
+    }
+
+    console.log('Extracted accessToken:', accessToken ? `Found (${accessToken.substring(0, 20)}...)` : 'Not found');
+    console.log('Extracted refreshToken:', refreshToken ? 'Found' : 'Not found');
+    
+    // If still no token, log full URL for debugging (truncated)
+    if (!accessToken) {
+      console.error('Could not extract token from URL');
+      console.error('URL hostname:', new URL(responseUrl).hostname);
+      console.error('URL pathname:', new URL(responseUrl).pathname);
+      console.error('URL hash:', new URL(responseUrl).hash?.substring(0, 100));
+      console.error('URL search:', new URL(responseUrl).search);
+      throw new Error('No access token received from OAuth flow. Check console for URL details.');
+    }
+
+    // Get user info
+    const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'apikey': SUPABASE_ANON_KEY
+      }
+    });
+
+    if (!userResponse.ok) {
+      throw new Error('Failed to get user info');
+    }
+
+    const user = await userResponse.json();
+
+    // Extract name from user metadata (Google provides full_name or name)
+    let userName = null;
+    if (user.user_metadata?.full_name) {
+      userName = user.user_metadata.full_name;
+    } else if (user.user_metadata?.name) {
+      userName = user.user_metadata.name;
+    } else if (user.user_metadata?.display_name) {
+      userName = user.user_metadata.display_name;
+    } else if (user.raw_user_meta_data?.full_name) {
+      userName = user.raw_user_meta_data.full_name;
+    }
+
+    // Store auth data
+    authUser = {
+      id: user.id,
+      email: user.email,
+      name: userName || user.email.split('@')[0],
+      avatar: user.user_metadata?.avatar_url || user.user_metadata?.picture || null
+    };
+
+    // CRITICAL: Use Supabase client to set session if available
+    // This allows Supabase to manage session persistence via Chrome storage adapter
+    if (supabaseClient && supabaseClient.auth) {
+      console.log('Setting Supabase session...');
+      try {
+        const { data, error } = await supabaseClient.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken || '',
+        });
+        
+        if (error) {
+          console.error('Error setting Supabase session:', error);
+        } else {
+          console.log('✓ Supabase session set successfully');
+          // Supabase will automatically persist this to Chrome storage via the adapter
+          // The onAuthStateChange listener will update the UI
+          return; // Exit early - onAuthStateChange will handle UI update
+        }
+      } catch (sessionError) {
+        console.error('Exception setting Supabase session:', sessionError);
+      }
+    }
+
+    // Fallback: Manual storage save (for backward compatibility)
+    console.log('Saving auth data to storage manually (fallback)...');
+    console.log('authUser object:', JSON.stringify(authUser, null, 2));
+    console.log('accessToken length:', accessToken?.length);
+    
+    // Save to BOTH sync and local storage for reliability
+    // Chrome storage sync can have delays or size limits
+    const authData = {
+      authUser: authUser,
+      authToken: accessToken,
+      refreshToken: refreshToken || null
+    };
+    
+    try {
+      // Save to sync storage
+      await chrome.storage.sync.set(authData);
+      console.log('✓ Data saved to chrome.storage.sync');
+    } catch (syncError) {
+      console.warn('chrome.storage.sync failed:', syncError);
+    }
+    
+    // ALWAYS also save to local storage as backup
+    try {
+      await chrome.storage.local.set(authData);
+      console.log('✓ Data saved to chrome.storage.local (backup)');
+    } catch (localError) {
+      console.error('chrome.storage.local also failed:', localError);
+      throw new Error('Failed to save authentication data to both sync and local storage');
+    }
+    
+    // Verify it was saved to at least one storage location
+    let verifySync = await chrome.storage.sync.get(['authUser', 'authToken']);
+    let verifyLocal = await chrome.storage.local.get(['authUser', 'authToken']);
+    
+    const savedInSync = verifySync.authUser && verifySync.authToken;
+    const savedInLocal = verifyLocal.authUser && verifyLocal.authToken;
+    
+    if (savedInSync || savedInLocal) {
+      const savedData = savedInSync ? verifySync : verifyLocal;
+      console.log('✓ Auth data verified in storage:', {
+        location: savedInSync ? 'sync' : 'local',
+        id: savedData.authUser.id,
+        email: savedData.authUser.email,
+        name: savedData.authUser.name
+      });
+    } else {
+      console.error('✗ Auth data NOT found in either storage!');
+      console.error('Sync storage:', verifySync);
+      console.error('Local storage:', verifyLocal);
+      throw new Error('Failed to verify authentication data in storage');
+    }
+
+    // CRITICAL: Send auth data to background script to save it there
+    // The background script persists even when popup closes during OAuth
+    // This ensures the data is saved even if the popup context is destroyed
+    console.log('=== Sending auth data to background script ===');
+    try {
+      const saveResponse = await new Promise((resolve, reject) => {
+        // Set a timeout to prevent hanging
+        const timeout = setTimeout(() => {
+          reject(new Error('Background script save timeout'));
+        }, 5000);
+        
+        chrome.runtime.sendMessage({
+          action: 'saveAuthData',
+          authUser: authUser,
+          authToken: accessToken,
+          refreshToken: refreshToken || null
+        }, (response) => {
+          clearTimeout(timeout);
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        });
+      });
+      
+      console.log('Background script response:', saveResponse);
+      if (saveResponse && saveResponse.success) {
+        console.log('✓ Auth data saved by background script to', saveResponse.location);
+      } else {
+        console.error('✗ Background script save failed:', saveResponse);
+      }
+    } catch (saveError) {
+      console.error('Error sending auth data to background script:', saveError);
+      console.error('Save error details:', {
+        message: saveError.message,
+        stack: saveError.stack
+      });
+      // Don't throw - we already saved to popup storage, this is just backup
+    }
+
+    // Also notify background script to start syncing
+    chrome.runtime.sendMessage({
+      action: 'authStateChanged',
+      isAuthenticated: true,
+      userId: authUser.id,
+      token: accessToken
+    }).catch(err => console.error('Error notifying background script:', err));
+
+    // Wait a moment for background script to save, then re-check
+    console.log('=== Sign-in successful! Waiting for storage to be ready... ===');
+    await new Promise(resolve => setTimeout(resolve, 800)); // Give storage time to sync
+    
+    // Re-check auth status from storage to ensure consistency
+    console.log('=== Re-checking auth status after save ===');
+    const verified = await checkAuthStatus();
+    console.log('Re-check result:', { verified, authUser: authUser });
+    
+    // Update UI after reloading from storage
+    console.log('authUser after re-check:', authUser);
+    console.log('Updating UI...');
+    
+    // Force UI update - ensure DOM is ready and then update
+    // Use multiple strategies to ensure UI updates
+    const updateUI = () => {
+      updateAuthUI();
+      
+      // Double-check after a small delay to catch any edge cases
+      setTimeout(async () => {
+        const verifiedAgain = await checkAuthStatus();
+        console.log('Double-check result:', { verified: verifiedAgain, authUser: authUser });
+        if (verifiedAgain && authUser) {
+          updateAuthUI();
+        }
+      }, 500);
+    };
+    
+    // Try immediate update
+    updateUI();
+    
+    // Also schedule for next frame (in case DOM isn't ready)
+    requestAnimationFrame(updateUI);
+    
+    // One more check after a longer delay to catch Chrome storage sync delays
+    setTimeout(async () => {
+      const finalCheck = await checkAuthStatus();
+      if (finalCheck && authUser) {
+        console.log('Final check passed, updating UI one more time');
+        updateAuthUI();
+      }
+    }, 1500);
+    
+    console.log('=== signInWithGoogle COMPLETED ===');
+  } catch (error) {
+    console.error('=== signInWithGoogle ERROR ===');
+    console.error('Error:', error);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    alert('Failed to sign in: ' + error.message);
+  }
+}
+
+// Sign out
+async function signOut() {
+  try {
+    // If Supabase client is available, use it to sign out
+    // This will automatically clear the session from Chrome storage
+    if (supabaseClient && supabaseClient.auth) {
+      console.log('Signing out via Supabase client...');
+      const { error } = await supabaseClient.auth.signOut();
+      if (error) {
+        console.error('Supabase sign out error:', error);
+      } else {
+        console.log('✓ Signed out via Supabase');
+        // onAuthStateChange will handle UI update
+        return;
+      }
+    }
+    
+    // Fallback: Manual sign out
+    console.log('Signing out manually (fallback)...');
+    // Clear stored auth data from both sync and local
+    await chrome.storage.sync.remove(['authUser', 'authToken', 'refreshToken']);
+    await chrome.storage.local.remove(['authUser', 'authToken', 'refreshToken']);
+    authUser = null;
+
+    // Notify background script to stop syncing
+    chrome.runtime.sendMessage({
+      action: 'authStateChanged',
+      isAuthenticated: false
+    }).catch(err => console.error('Error notifying background:', err));
+
+    // Update UI
+    updateAuthUI();
+  } catch (error) {
+    console.error('Error signing out:', error);
+  }
+}
+
+// Initialize authentication UI
+async function initAuth() {
+  console.log('initAuth called');
+  
+  // Always show auth section
+  const authSection = document.getElementById('auth-section');
+  if (authSection) {
+    authSection.style.display = 'block';
+  } else {
+    console.error('auth-section element not found');
+  }
+
+  // Set up event listeners
+  const signInButton = document.getElementById('sign-in-button');
+  const signOutButton = document.getElementById('sign-out-button');
+
+  if (signInButton) {
+    signInButton.addEventListener('click', signInWithGoogle, { once: false });
+    
+    // Disable button if backend not configured
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      signInButton.disabled = true;
+      signInButton.style.opacity = '0.5';
+      signInButton.style.cursor = 'not-allowed';
+      const subtitle = document.querySelector('.auth-subtitle');
+      if (subtitle) {
+        subtitle.textContent = 'Backend not configured (see AUTHENTICATION_SETUP.md)';
+      }
+    }
+  } else {
+    console.error('sign-in-button not found');
+  }
+
+  if (signOutButton) {
+    signOutButton.addEventListener('click', signOut, { once: false });
+  } else {
+    console.error('sign-out-button not found');
+  }
+
+  // Initialize Supabase client if configured
+  if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    console.log('Supabase configured, initializing client...');
+    supabaseClient = initSupabaseClient();
+    
+    if (supabaseClient && supabaseClient.auth) {
+      console.log('Supabase client initialized, setting up auth state listener...');
+      
+      // CRITICAL: Listen for auth state changes
+      // This automatically fires when session changes (including after popup reopens)
+      supabaseClient.auth.onAuthStateChange((event, session) => {
+        console.log('Supabase auth state changed:', event, session ? 'has session' : 'no session');
+        
+        if (session && session.user) {
+          // Extract user info from Supabase session
+          authUser = {
+            id: session.user.id,
+            email: session.user.email,
+            name: session.user.user_metadata?.full_name || 
+                  session.user.user_metadata?.name || 
+                  session.user.email?.split('@')[0],
+            avatar: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || null
+          };
+          console.log('Auth state: Signed in as', authUser.name);
+          updateAuthUI();
+        } else {
+          authUser = null;
+          console.log('Auth state: Signed out');
+          updateAuthUI();
+        }
+      });
+      
+      // Check initial session
+      const isAuthenticated = await checkAuthStatus();
+      console.log('Auth check complete, isAuthenticated:', isAuthenticated, 'authUser:', authUser);
+    } else {
+      // Fallback: manual auth check
+      console.log('Supabase client not available, using manual auth check...');
+      const isAuthenticated = await checkAuthStatus();
+      console.log('Auth check complete, isAuthenticated:', isAuthenticated, 'authUser:', authUser);
+    }
+    
+    // Update UI based on auth status
+    updateAuthUI();
+    // Also schedule for next frame to catch any edge cases
+    requestAnimationFrame(() => {
+      updateAuthUI();
+    });
+  } else {
+    console.log('Supabase not configured');
+    // Update UI even if not configured (show signed out state)
+    updateAuthUI();
+  }
+}
+
+// Update authentication UI
+function updateAuthUI() {
+  try {
+    const signedOutDiv = document.getElementById('auth-signed-out');
+    const signedInDiv = document.getElementById('auth-signed-in');
+
+    if (!signedOutDiv || !signedInDiv) {
+      console.warn('Auth UI elements not found yet, will retry...');
+      // Retry after a short delay if elements aren't ready yet
+      setTimeout(() => {
+        updateAuthUI();
+      }, 100);
+      return;
+    }
+
+    console.log('Updating auth UI, authUser:', authUser);
+
+    if (authUser && authUser.id) {
+      // Show signed in UI
+      console.log('Showing signed in UI for user:', authUser.name || authUser.email);
+      
+      // Use class-based approach for more reliable toggling
+      signedOutDiv.classList.add('hide');
+      signedOutDiv.classList.remove('show');
+      signedOutDiv.style.display = 'none';
+      
+      signedInDiv.classList.add('show');
+      signedInDiv.classList.remove('hide');
+      signedInDiv.style.display = 'flex';
+      
+      // Force a reflow to ensure styles are applied
+      signedInDiv.offsetHeight;
+      
+      // Verify the computed styles
+      const computedStyle = window.getComputedStyle(signedInDiv);
+      console.log('Computed display style for signed-in:', computedStyle.display);
+      console.log('Has show class:', signedInDiv.classList.contains('show'));
+      if (computedStyle.display === 'none') {
+        console.error('ERROR: Display is still none! Element state:', {
+          classList: Array.from(signedInDiv.classList),
+          styleDisplay: signedInDiv.style.display,
+          computedDisplay: computedStyle.display
+        });
+        // Force with inline style and !important as last resort
+        signedInDiv.style.setProperty('display', 'flex', 'important');
+      }
+
+      // Update greeting with user's name
+      const greetingEl = document.getElementById('auth-greeting-text');
+      if (greetingEl) {
+        // Use first name if available, otherwise use email username
+        const firstName = authUser.name ? authUser.name.split(' ')[0] : null;
+        const displayName = firstName || authUser.email?.split('@')[0] || 'there';
+        greetingEl.textContent = `Hi ${displayName}!`;
+        console.log('✓ Updated greeting to:', greetingEl.textContent);
+      } else {
+        console.warn('Greeting element not found, will retry...');
+        // Retry after short delay if greeting element isn't ready
+        setTimeout(() => {
+          const retryGreetingEl = document.getElementById('auth-greeting-text');
+          if (retryGreetingEl && authUser) {
+            const firstName = authUser.name ? authUser.name.split(' ')[0] : null;
+            const displayName = firstName || authUser.email?.split('@')[0] || 'there';
+            retryGreetingEl.textContent = `Hi ${displayName}!`;
+            console.log('✓ Updated greeting on retry:', retryGreetingEl.textContent);
+          }
+        }, 100);
+      }
+    } else {
+      // Show signed out UI
+      console.log('Showing signed out UI (authUser:', authUser, ')');
+      signedOutDiv.classList.remove('hide');
+      signedOutDiv.classList.add('show');
+      signedOutDiv.style.display = 'flex';
+      
+      signedInDiv.classList.remove('show');
+      signedInDiv.classList.add('hide');
+      signedInDiv.style.display = 'none';
+      
+      // Verify computed styles
+      const computedStyle = window.getComputedStyle(signedOutDiv);
+      console.log('Computed display style for signed-out:', computedStyle.display);
+    }
+    
+    // Ensure auth section is visible
+    const authSection = document.getElementById('auth-section');
+    if (authSection) {
+      authSection.style.display = 'block';
+    }
+  } catch (error) {
+    console.error('Error updating auth UI:', error);
+    // Retry once after error
+    setTimeout(() => {
+      try {
+        updateAuthUI();
+      } catch (retryError) {
+        console.error('Retry failed:', retryError);
+      }
+    }, 200);
+  }
+}
 
 // Get current active tab and check green hosting status
 async function initPopup() {
@@ -81,6 +843,11 @@ async function initPopup() {
       checkGreenHosting(domain),
       checkWebsiteCarbon(tab.url, timeSpent)
     ]);
+
+    // Initialize authentication UI
+    // Give a small delay to ensure storage is ready (especially after popup reopen)
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await initAuth();
   } catch (error) {
     console.error('Error initializing popup:', error);
     showError(`Error loading extension: ${error.message}`);
@@ -645,7 +1412,152 @@ document.addEventListener('visibilitychange', () => {
   } else if (currentDomain) {
     // Restart updates if popup becomes visible again
     startTimeUpdates();
+    // Also reload auth state when popup becomes visible
+    // This catches the case where popup reopens after OAuth
+    console.log('Popup became visible, reloading auth state...');
+    // Use a longer delay to give storage time to sync
+    setTimeout(() => {
+      reloadAuthAndUpdateUI();
+    }, 300);
   }
+});
+
+// Helper to reload auth state and update UI with retry
+async function reloadAuthAndUpdateUI() {
+  if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    console.log('reloadAuthAndUpdateUI: Reloading auth state...');
+    const authenticated = await checkAuthStatus(0, 5); // Try up to 6 times with delays
+    console.log('reloadAuthAndUpdateUI: Auth check result:', authenticated, 'authUser:', authUser);
+    
+    if (authenticated && authUser) {
+      updateAuthUI();
+      // Also schedule for next frame to ensure it happens
+      requestAnimationFrame(() => {
+        updateAuthUI();
+      });
+      // One more check after a delay to catch Chrome storage sync delays
+      setTimeout(() => {
+        if (authUser) {
+          updateAuthUI();
+        }
+      }, 1000);
+    } else {
+      // If not authenticated, still update UI to show sign-in button
+      updateAuthUI();
+    }
+  }
+}
+
+// Initialize auth state early (but wait for DOM)
+(async () => {
+  if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    console.log('Early auth init: Initializing Supabase client...');
+    
+    // Initialize Supabase client early
+    supabaseClient = initSupabaseClient();
+    
+    if (supabaseClient && supabaseClient.auth) {
+      console.log('Early auth init: Setting up auth state listener...');
+      
+      // CRITICAL: Set up auth state change listener early
+      // This will automatically update UI when session changes
+      supabaseClient.auth.onAuthStateChange((event, session) => {
+        console.log('Early auth: State changed:', event, session ? 'has session' : 'no session');
+        
+        if (session && session.user) {
+          authUser = {
+            id: session.user.id,
+            email: session.user.email,
+            name: session.user.user_metadata?.full_name || 
+                  session.user.user_metadata?.name || 
+                  session.user.email?.split('@')[0],
+            avatar: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || null
+          };
+          console.log('Early auth: Signed in as', authUser.name);
+          
+          // Wait for DOM, then update UI
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => updateAuthUI());
+          } else {
+            updateAuthUI();
+            requestAnimationFrame(() => updateAuthUI());
+          }
+        } else {
+          authUser = null;
+          console.log('Early auth: Signed out');
+          if (document.readyState !== 'loading') {
+            updateAuthUI();
+          }
+        }
+      });
+      
+      // Check initial session
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (session) {
+        console.log('Early auth init: Session found:', session.user.email);
+      } else {
+        console.log('Early auth init: No session found');
+      }
+    } else {
+      // Fallback: manual check
+      console.log('Early auth init: Using manual check (Supabase client not available)');
+      const authenticated = await checkAuthStatus(0, 5);
+      console.log('Early auth init: Result:', authenticated, 'authUser:', authUser);
+    }
+    
+    // Wait for DOM to be ready before updating UI
+    const updateUIWhenReady = () => {
+      updateAuthUI();
+      requestAnimationFrame(() => {
+        updateAuthUI();
+      });
+    };
+    
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', updateUIWhenReady);
+    } else {
+      setTimeout(() => {
+        updateUIWhenReady();
+      }, 50);
+    }
+  }
+})();
+
+// Also reload on focus (when popup window gains focus)
+window.addEventListener('focus', () => {
+  console.log('Popup gained focus, reloading auth state...');
+  reloadAuthAndUpdateUI();
+});
+
+// CRITICAL: Listen for storage changes to detect when auth data is saved
+// This works even when popup reopens after OAuth - storage changes trigger immediately
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  console.log('Storage changed detected:', {
+    area: areaName,
+    changedKeys: Object.keys(changes),
+    hasAuthUser: !!changes.authUser,
+    hasAuthToken: !!changes.authToken
+  });
+  
+  // If auth data was added/changed, reload auth state and update UI
+  if (changes.authUser || changes.authToken) {
+    console.log('Auth data change detected in storage, reloading...');
+    // Use a small delay to ensure the change is fully committed
+    setTimeout(() => {
+      reloadAuthAndUpdateUI();
+    }, 100);
+  }
+});
+
+// Listen for messages from background script when auth data is saved
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'authDataSaved') {
+    console.log('Received authDataSaved message from background script');
+    // Reload auth state immediately when background script confirms save
+    reloadAuthAndUpdateUI();
+    sendResponse({ success: true });
+  }
+  return true; // Keep message channel open for async response
 });
 
 // Initialize popup when DOM is ready
