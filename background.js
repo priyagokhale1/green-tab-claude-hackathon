@@ -16,6 +16,12 @@ let syncInterval = null;
 const SUPABASE_URL = 'https://taaadgsnajjsmpidtusz.supabase.co'; // e.g., 'https://your-project.supabase.co'
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhYWFkZ3NuYWpqc21waWR0dXN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMyMDk5ODEsImV4cCI6MjA3ODc4NTk4MX0.QKFSl_WlrGVT8Wp3RsJWrqOC3WyEPmCi54xIinydBns'; // e.g., 'your-anon-key-here'
 
+// Energy conversion factors (same as popup.js)
+const CO2_TO_WH = 2; // Wh per gram CO2 (average)
+const WH_TO_WATER = 0.001; // Liters per Wh (average)
+const CO2_PER_PAGE_VIEW = 0.5; // grams CO2 per page view
+const PAGES_PER_MINUTE = 2.5; // average pages per minute while browsing
+
 // Initialize storage and load existing tabs
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeAllTabs();
@@ -196,6 +202,28 @@ async function getTodayTimeForDomain(domain) {
   }
 }
 
+// Calculate environmental impact from time spent on a site
+function calculateImpact(totalSeconds) {
+  // Calculate estimated page views
+  const minutes = totalSeconds / 60;
+  const pageViews = minutes * PAGES_PER_MINUTE;
+  
+  // Calculate CO2 (in grams)
+  const co2Grams = pageViews * CO2_PER_PAGE_VIEW;
+  
+  // Convert CO2 to energy (Wh)
+  const energyWh = co2Grams * CO2_TO_WH;
+  
+  // Convert energy to water (Liters)
+  const waterLiters = energyWh * WH_TO_WATER;
+  
+  return {
+    co2_grams: parseFloat(co2Grams.toFixed(4)),
+    energy_wh: parseFloat(energyWh.toFixed(4)),
+    water_liters: parseFloat(waterLiters.toFixed(6))
+  };
+}
+
 // Check authentication status on startup
 async function checkAuthOnStartup() {
   try {
@@ -246,11 +274,11 @@ function startDataSync() {
     clearInterval(syncInterval);
   }
 
-  // Sync immediately, then every 5 minutes
+  // Sync immediately, then every 30 seconds
   syncDataToBackend();
   syncInterval = setInterval(() => {
     syncDataToBackend();
-  }, 5 * 60 * 1000); // 5 minutes
+  }, 30 * 1000); // 30 seconds
 }
 
 // Stop data sync
@@ -277,11 +305,17 @@ async function syncDataToBackend() {
     for (const [date, domains] of Object.entries(localData)) {
       for (const [domain, seconds] of Object.entries(domains)) {
         if (seconds > 0) {
+          // Calculate environmental impact
+          const impact = calculateImpact(seconds);
+          
           syncData.push({
             date: date,
             domain: domain,
             total_seconds: seconds,
-            user_id: userId
+            user_id: userId,
+            energy_wh: impact.energy_wh,
+            water_liters: impact.water_liters,
+            co2_grams: impact.co2_grams
           });
         }
       }
