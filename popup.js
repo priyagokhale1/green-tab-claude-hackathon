@@ -48,6 +48,23 @@ const chromeStorageAdapter = {
   },
 };
 
+// Helper function to check if Chrome APIs are available
+function validateChromeApis() {
+  if (!chrome) {
+    throw new Error('Chrome object is not available - extension context may be invalid');
+  }
+  if (!chrome.identity) {
+    throw new Error('chrome.identity is not available - check manifest permissions');
+  }
+  if (!chrome.storage) {
+    throw new Error('chrome.storage is not available - check manifest permissions');
+  }
+  if (!chrome.tabs) {
+    throw new Error('chrome.tabs is not available - check manifest permissions');
+  }
+  return true;
+}
+
 // Cache for equivalencies to avoid too many API calls
 let equivalencyCache = new Map();
 
@@ -211,6 +228,23 @@ async function signInWithGoogle() {
   }
 
   try {
+    // Verify chrome.identity is available
+    if (!chrome || !chrome.identity || !chrome.identity.getRedirectURL) {
+      const errorMsg = 'Chrome identity API is not available. This can happen if:\n\n' +
+        '1. The extension context was lost\n' +
+        '2. You\'re not in a Chrome extension context\n' +
+        '3. The extension needs to be reloaded\n\n' +
+        'Please try:\n' +
+        '- Closing and reopening the popup\n' +
+        '- Reloading the extension (chrome://extensions)\n' +
+        '- Restarting Chrome';
+      console.error('=== Chrome Identity API Not Available ===');
+      console.error('chrome object:', typeof chrome);
+      console.error('chrome.identity:', typeof chrome?.identity);
+      alert(errorMsg);
+      throw new Error(errorMsg);
+    }
+    
     // Get extension redirect URL (Chrome requires this to be configured in Google Console)
     const extensionRedirectUrl = chrome.identity.getRedirectURL();
     console.log('Extension redirect URL:', extensionRedirectUrl);
@@ -791,6 +825,10 @@ function updateAuthUI() {
 // Get current active tab and check green hosting status
 async function initPopup() {
   try {
+    // Validate that Chrome APIs are available
+    validateChromeApis();
+    console.log('✓ Chrome APIs validated');
+    
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const [tab] = tabs;
     
