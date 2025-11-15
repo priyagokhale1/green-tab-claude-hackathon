@@ -5,29 +5,18 @@ import { format, parseISO, differenceInDays, addDays } from 'date-fns'
 
 interface DataPoint {
   date: string
-  energy_wh: number
+  co2_grams: number
 }
 
-export function EnergyChart({ data }: { data: DataPoint[] }) {
+export function CO2Chart({ data }: { data: DataPoint[] }) {
   // Create a date range for the last 30 days
   const endDate = new Date()
   const startDate = addDays(endDate, -30)
   
-  // Generate labels every 2 days
-  const xAxisLabels: string[] = []
-  const xAxisTicks: Date[] = []
-  let currentDate = new Date(startDate)
-  
-  while (currentDate <= endDate) {
-    xAxisLabels.push(format(currentDate, 'MMM d'))
-    xAxisTicks.push(new Date(currentDate))
-    currentDate = addDays(currentDate, 2)
-  }
-  
   // Create a map of data by date string (YYYY-MM-DD)
   const dataMap = new Map<string, number>()
   data.forEach(d => {
-    dataMap.set(d.date, d.energy_wh)
+    dataMap.set(d.date, d.co2_grams)
   })
   
   // Generate chart data for all dates in range, filling gaps with null
@@ -43,7 +32,7 @@ export function EnergyChart({ data }: { data: DataPoint[] }) {
     chartData.push({
       date: format(chartDate, 'MMM d'),
       dateValue: daysSinceStart,
-      energy: value !== undefined ? parseFloat(value.toFixed(2)) : null
+      co2: value !== undefined ? parseFloat(value.toFixed(4)) : null
     })
     
     chartDate = addDays(chartDate, 1)
@@ -86,10 +75,10 @@ export function EnergyChart({ data }: { data: DataPoint[] }) {
         />
         <Line 
           type="monotone" 
-          dataKey="energy" 
-          stroke="var(--energy-color)" 
+          dataKey="co2" 
+          stroke="var(--carbon-color)" 
           strokeWidth={2}
-          dot={{ fill: 'var(--energy-color)', r: 4 }}
+          dot={{ fill: 'var(--carbon-color)', r: 4 }}
           connectNulls={true}
         />
       </LineChart>

@@ -9,7 +9,7 @@ interface Domain {
 export function DomainList({ domains }: { domains: Domain[] }) {
   const formatNumber = (num: number, decimals: number = 2) => {
     if (num < 0.01) return '<0.01'
-    return num.toFixed(decimals)
+    return num.toFixed(decimals).replace(/\.?0+$/, '')
   }
 
   const formatTime = (seconds: number) => {
@@ -22,37 +22,34 @@ export function DomainList({ domains }: { domains: Domain[] }) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {domains.length === 0 ? (
-        <p className="text-gray-400 text-center py-8">No data yet. Start browsing to see your impact!</p>
+        <p className="text-sm text-center py-8" style={{ color: 'var(--text-subtle)' }}>
+          No data yet. Start browsing to see your impact!
+        </p>
       ) : (
         domains.map((domain, index) => (
-          <div key={domain.domain} className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-3">
-                <span className="text-gray-500 text-sm font-medium">#{index + 1}</span>
-                <h4 className="font-semibold text-white">{domain.domain}</h4>
-              </div>
-              <span className="text-sm text-gray-400">{formatTime(domain.total_seconds)}</span>
-            </div>
-            <div className="grid grid-cols-3 gap-4 text-sm">
-              <div>
-                <span className="text-gray-400">Energy:</span>
-                <span className="text-yellow-400 ml-2 font-medium">{formatNumber(domain.energy_wh)} Wh</span>
-              </div>
-              <div>
-                <span className="text-gray-400">Water:</span>
-                <span className="text-blue-400 ml-2 font-medium">{formatNumber(domain.water_liters)} L</span>
-              </div>
-              <div>
-                <span className="text-gray-400">CO₂:</span>
-                <span className="text-pink-400 ml-2 font-medium">{formatNumber(domain.co2_grams)} g</span>
+          <div key={domain.domain} className="domain-row">
+            <div className="domain-main">
+              <div className="domain-rank">#{index + 1}</div>
+              <div className="domain-info">
+                <div className="domain-name">{domain.domain}</div>
+                <div className="domain-meta">
+                  <span style={{ color: 'var(--text-subtle)' }}>Energy: </span>
+                  <span style={{ color: 'var(--energy-color)' }}>{formatNumber(domain.energy_wh, 2)} Wh</span>
+                  <span style={{ color: 'var(--text-subtle)' }}> · </span>
+                  <span style={{ color: 'var(--text-subtle)' }}>Water: </span>
+                  <span style={{ color: 'var(--water-color)' }}>{formatNumber(domain.water_liters, 2)} L</span>
+                  <span style={{ color: 'var(--text-subtle)' }}> · </span>
+                  <span style={{ color: 'var(--text-subtle)' }}>CO₂: </span>
+                  <span style={{ color: 'var(--carbon-color)' }}>{formatNumber(domain.co2_grams, 2)} g</span>
+                </div>
               </div>
             </div>
+            <div className="domain-time">{formatTime(domain.total_seconds)}</div>
           </div>
         ))
       )}
     </div>
   )
 }
-
