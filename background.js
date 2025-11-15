@@ -22,14 +22,29 @@ const WH_TO_WATER = 0.001; // Liters per Wh (average)
 const CO2_PER_PAGE_VIEW = 0.5; // grams CO2 per page view
 const PAGES_PER_MINUTE = 2.5; // average pages per minute while browsing
 
+// Use chrome.alarms API for persistent periodic sync
+// Alarms persist even when service worker is terminated (Manifest V3)
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'syncData') {
+    console.log('Sync alarm fired, syncing data...');
+    syncDataToBackend();
+  }
+});
+
 // Initialize storage and load existing tabs
 chrome.runtime.onInstalled.addListener(async () => {
+  console.log('Extension installed/updated, initializing...');
   await initializeAllTabs();
+  // Restart sync if authenticated
+  await checkAuthOnStartup();
 });
 
 // Also initialize when extension starts (service worker wakes up)
 chrome.runtime.onStartup.addListener(async () => {
+  console.log('Service worker started, initializing...');
   await initializeAllTabs();
+  // Restart sync if authenticated (service worker was terminated)
+  await checkAuthOnStartup();
 });
 
 // Initialize immediately when script loads
@@ -268,37 +283,81 @@ async function checkAuthOnStartup() {
 checkAuthOnStartup();
 
 // Start periodic data sync when authenticated
+// Uses chrome.alarms API for persistence across service worker restarts
+// This function restarts sync and should be called:
+// 1. When auth state changes
+// 2. When service worker wakes up (checkAuthOnStartup)
 function startDataSync() {
-  // Clear any existing sync interval
-  if (syncInterval) {
-    clearInterval(syncInterval);
-  }
-
-  // Sync immediately, then every 30 seconds
-  syncDataToBackend();
-  syncInterval = setInterval(() => {
-    syncDataToBackend();
-  }, 30 * 1000); // 30 seconds
-}
-
-// Stop data sync
-function stopDataSync() {
+  // Clear any existing sync interval (legacy)
   if (syncInterval) {
     clearInterval(syncInterval);
     syncInterval = null;
   }
+
+  if (!isAuthenticated || !authToken) {
+    console.log('Cannot start sync: not authenticated');
+    // Clear alarm if not authenticated
+    chrome.alarms.clear('syncData');
+    return;
+  }
+
+  console.log('Starting periodic data sync (every 30 seconds)...');
+  
+  // Clear any existing alarm first
+  chrome.alarms.clear('syncData');
+  
+  // Sync immediately
+  syncDataToBackend();
+  
+  // Create alarm that persists even when service worker terminates
+  chrome.alarms.create('syncData', {
+    periodInMinutes: 0.5 // 30 seconds (0.5 minutes)
+  });
+  
+  console.log('✓ Sync alarm created (persists across service worker restarts)');
+  
+  // Also keep interval as backup (only runs while service worker is alive)
+  syncInterval = setInterval(() => {
+    if (isAuthenticated && authToken) {
+      syncDataToBackend();
+    } else {
+      console.log('Sync stopped: no longer authenticated');
+      stopDataSync();
+    }
+  }, 30 * 1000);
+}
+
+// Stop data sync
+function stopDataSync() {
+  // Clear interval
+  if (syncInterval) {
+    clearInterval(syncInterval);
+    syncInterval = null;
+  }
+  
+  // Clear alarm
+  chrome.alarms.clear('syncData');
+  console.log('Sync stopped: interval and alarm cleared');
 }
 
 // Sync local data to backend
 async function syncDataToBackend() {
   if (!isAuthenticated || !authToken || !SUPABASE_URL) {
+    console.log('Sync skipped: not authenticated or missing config');
     return;
   }
 
   try {
+    console.log('Starting data sync to backend...');
+    
     // Get all local tracking data
     const result = await chrome.storage.local.get([storageKey]);
     const localData = result[storageKey] || {};
+
+    if (Object.keys(localData).length === 0) {
+      console.log('Sync skipped: no local data to sync');
+      return;
+    }
 
     // Transform data for backend
     const syncData = [];
@@ -322,29 +381,64 @@ async function syncDataToBackend() {
     }
 
     if (syncData.length === 0) {
-      return; // Nothing to sync
+      console.log('Sync skipped: no data to sync (all zero seconds)');
+      return;
     }
 
-    // Send to backend
-    // Note: You'll need to create a database function or API endpoint
-    // that handles bulk upsert of tracking data
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/tracking_data`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authToken}`,
-        'apikey': SUPABASE_ANON_KEY,
-        'Prefer': 'resolution=merge-duplicates' // Upsert behavior
-      },
-      body: JSON.stringify(syncData)
-    });
+    console.log(`Syncing ${syncData.length} records to backend...`);
 
-    if (!response.ok) {
-      throw new Error(`Sync failed: ${response.status}`);
+    // Use UPSERT for each record
+    // PostgREST upsert: POST with Prefer: resolution=merge-duplicates
+    // Must include all unique constraint columns (user_id, date, domain)
+    let successCount = 0;
+    let errorCount = 0;
+    
+    // Process records one by one for better error handling
+    for (const record of syncData) {
+      try {
+        // POST with upsert header - will update if (user_id, date, domain) exists
+        const response = await fetch(`${SUPABASE_URL}/rest/v1/tracking_data`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}`,
+            'apikey': SUPABASE_ANON_KEY,
+            'Prefer': 'resolution=merge-duplicates' // Upsert on conflict
+          },
+          body: JSON.stringify(record)
+        });
+
+        if (response.ok) {
+          successCount++;
+        } else {
+          const errorText = await response.text();
+          console.error(`Sync failed for ${record.domain} on ${record.date}:`, response.status, errorText);
+          
+          // If it's a 404, the table might not exist or RLS is blocking
+          // If it's a 400, there might be a validation error
+          if (response.status === 404) {
+            console.error('Table might not exist or RLS policy is blocking. Check Supabase setup.');
+          }
+          
+          errorCount++;
+        }
+      } catch (recordError) {
+        console.error(`Error syncing record for ${record.domain}:`, recordError);
+        errorCount++;
+      }
+      
+      // Small delay between requests to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
 
-    // Mark as synced (optional: track last sync time)
-    await chrome.storage.sync.set({ lastSyncAt: Date.now() });
+    if (successCount > 0) {
+      console.log(`✓ Sync complete: ${successCount} records synced, ${errorCount} failed`);
+    } else if (errorCount > 0) {
+      console.error(`✗ Sync failed: ${errorCount} records failed to sync`);
+    }
+
+    // Mark as synced
+    await chrome.storage.local.set({ lastSyncAt: Date.now() });
   } catch (error) {
     console.error('Error syncing data to backend:', error);
     // Don't throw - allow local storage to continue working

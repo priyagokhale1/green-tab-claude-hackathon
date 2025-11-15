@@ -14,7 +14,8 @@
     "tabs",
     "activeTab",
     "storage",
-    "identity"
+    "identity",
+    "alarms"
   ],
   "host_permissions": [
     "http://*/*",
