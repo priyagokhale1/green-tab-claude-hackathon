@@ -5,9 +5,12 @@ const CO2_TO_WH = 2; // Wh per gram CO2 (average)
 // 1.0 L per kWh = 1.0 L per 1000 Wh = 0.001 L per Wh
 const WH_TO_WATER = 0.001; // Liters per Wh (average, varies by region)
 
-// Claude API configuration (set your API key here or use environment variable)
-// For production, you'd want to store this securely
-const CLAUDE_API_KEY = null; // Set this to your Claude API key if you have one
+// Claude API configuration
+// To use Claude API for intelligent equivalency comparisons:
+// 1. Get your API key from https://console.anthropic.com/
+// 2. Set CLAUDE_API_KEY below (for production, use secure storage/encryption)
+// 3. If null, the extension will use local fallback calculations
+const CLAUDE_API_KEY = null; // Set to your API key if you want to use Claude API
 const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
 
 // Cache for equivalencies to avoid too many API calls
@@ -25,19 +28,9 @@ let lastUpdateTime = Date.now();
 
 // Get current active tab and check green hosting status
 async function initPopup() {
-  console.log('=== GreenTab Popup Initialized ===');
-  
   try {
-    console.log('Attempting to query tabs...');
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    console.log('Tabs query result:', tabs);
-    console.log('Number of tabs returned:', tabs.length);
-    
     const [tab] = tabs;
-    console.log('First tab object:', tab);
-    console.log('Tab URL:', tab?.url);
-    console.log('Tab ID:', tab?.id);
-    console.log('Tab title:', tab?.title);
     
     if (!tab) {
       console.error('No tab returned from query');
@@ -47,27 +40,22 @@ async function initPopup() {
     }
     
     if (!tab.url) {
-      console.error('Tab exists but has no URL. Tab object:', JSON.stringify(tab, null, 2));
+      console.error('Tab exists but has no URL');
       document.getElementById('current-domain').textContent = 'Tab has no URL';
       showError(`Unable to access tab URL. Tab ID: ${tab.id}`);
       return;
     }
-
-    console.log('Tab URL found:', tab.url);
     
     // Check if it's a special Chrome page
     if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('edge://')) {
-      console.log('Special Chrome page detected');
       document.getElementById('current-domain').textContent = 'Chrome internal page';
       showError('Cannot check green hosting for Chrome internal pages');
       return;
     }
 
     // Extract domain from URL
-    console.log('Parsing URL:', tab.url);
     const url = new URL(tab.url);
     const domain = url.hostname;
-    console.log('Extracted domain:', domain);
     
     // Store current domain for time updates
     // Reset carbon data if domain changed
@@ -79,26 +67,22 @@ async function initPopup() {
     
     // Remove 'www.' prefix if present for cleaner display
     const displayDomain = domain.replace(/^www\./, '');
-    console.log('Display domain:', displayDomain);
     document.getElementById('current-domain').textContent = displayDomain;
 
     // Get time spent on this domain
     const timeSpent = await getTimeForDomain(domain);
-    console.log('Time spent on domain (seconds):', timeSpent);
     updateTimeDisplay(timeSpent);
 
     // Start updating time every second
     startTimeUpdates();
 
     // Check green hosting status and get carbon data
-    console.log('Checking green hosting for domain:', domain);
     await Promise.all([
       checkGreenHosting(domain),
       checkWebsiteCarbon(tab.url, timeSpent)
     ]);
   } catch (error) {
     console.error('Error initializing popup:', error);
-    console.error('Error stack:', error.stack);
     showError(`Error loading extension: ${error.message}`);
   }
 }
@@ -199,31 +183,22 @@ async function checkGreenHosting(domain) {
   
   try {
     const apiUrl = `https://api.thegreenwebfoundation.org/greencheck/${encodeURIComponent(domain)}`;
-    console.log('Calling Greencheck API:', apiUrl);
-    
-    // Call Greencheck API
     const response = await fetch(apiUrl);
-    console.log('API response status:', response.status);
-    console.log('API response ok:', response.ok);
     
     if (!response.ok) {
       throw new Error(`API request failed: ${response.status}`);
     }
 
     const data = await response.json();
-    console.log('API response data:', data);
-    console.log('Is green?', data.green);
     
     // Update UI based on response
     if (data.green === true) {
-      console.log('Domain is on green hosting!');
       statusElement.className = 'status-pill status-good';
       statusElement.innerHTML = `
         <span class="status-dot"></span>
         Green
       `;
     } else {
-      console.log('Domain is not on green hosting');
       statusElement.className = 'status-pill status-bad';
       statusElement.innerHTML = `
         <span class="status-dot"></span>
@@ -232,7 +207,6 @@ async function checkGreenHosting(domain) {
     }
   } catch (error) {
     console.error('Error checking green hosting:', error);
-    console.error('Error stack:', error.stack);
     statusElement.className = 'status-pill status-loading';
     statusElement.innerHTML = `
       <span class="status-dot"></span>
@@ -255,17 +229,13 @@ async function checkWebsiteCarbon(url, timeSpentSeconds) {
   try {
     // Call Website Carbon API
     const apiUrl = `https://api.websitecarbon.com/site?url=${encodeURIComponent(url)}`;
-    console.log('Calling Website Carbon API:', apiUrl);
-    
     const response = await fetch(apiUrl);
-    console.log('Website Carbon API response status:', response.status);
     
     if (!response.ok) {
       throw new Error(`API request failed: ${response.status}`);
     }
 
     const data = await response.json();
-    console.log('Website Carbon API response data:', data);
     
     // Extract carbon per page view (in grams CO2)
     // Try multiple possible response formats
@@ -288,8 +258,6 @@ async function checkWebsiteCarbon(url, timeSpentSeconds) {
       co2PerPageView = data;
     }
     
-    console.log('Extracted CO2 per page view (grams):', co2PerPageView);
-    
     // Convert to grams if it's in a different unit
     if (co2PerPageView > 100) {
       // Likely in milligrams, convert to grams
@@ -299,7 +267,6 @@ async function checkWebsiteCarbon(url, timeSpentSeconds) {
     if (!co2PerPageView || co2PerPageView === 0) {
       // If API doesn't return usable data, use a default estimate
       // Average website: ~0.5g CO2 per page view
-      console.log('Using default CO2 estimate');
       const defaultCo2PerPage = 0.5;
       storedCo2PerPageView = defaultCo2PerPage;
       isEstimateValue = true;
@@ -311,7 +278,6 @@ async function checkWebsiteCarbon(url, timeSpentSeconds) {
     }
   } catch (error) {
     console.error('Error checking Website Carbon:', error);
-    console.error('Error stack:', error.stack);
     
     // Fallback: use default estimate
     const defaultCo2PerPage = 0.5; // grams CO2 per page view
@@ -339,13 +305,6 @@ async function calculateAndDisplayImpact(co2PerPageGrams, timeSpentSeconds, isEs
   
   // Convert energy to water (Liters)
   const waterLiters = energyWh * WH_TO_WATER;
-  
-  console.log('Calculated impact:', {
-    pageViews: estimatedPageViews,
-    co2Grams: totalCo2Grams,
-    energyWh: energyWh,
-    waterLiters: waterLiters
-  });
   
   // Format numbers for display
   const formatNumber = (num, decimals = 2) => {
@@ -418,7 +377,7 @@ async function getEquivalency(type, value) {
       equivalencyCache.set(cacheKey, equivalency);
       return equivalency;
     } catch (error) {
-      console.error(`Error getting Claude equivalency for ${type}:`, error);
+      console.error(`Error getting Claude equivalency for ${type}, falling back to local:`, error);
       // Fall through to local calculation
     }
   }
@@ -432,76 +391,152 @@ async function getEquivalency(type, value) {
 // Get equivalency from Claude API
 async function getClaudeEquivalency(type, value) {
   const prompts = {
-    energy: `Convert ${value} Wh of energy consumption into a relatable everyday comparison. Examples: "running a laptop for X minutes", "charging a phone X times", "powering a light bulb for X hours". Keep it concise (max 40 characters), start with "≈", and make it relatable.`,
-    water: `Convert ${value} L of water consumption into a relatable everyday comparison. Examples: "one water bottle", "a glass of water", "a few drops", "a spoonful". Keep it concise (max 40 characters), start with "≈", and make it relatable.`,
-    co2: `Convert ${value} g of CO₂ emissions into a relatable everyday comparison. Examples: "X km in a car", "X minutes of driving", "X km of walking". Keep it concise (max 40 characters), start with "≈", and make it relatable.`
+    energy: `Convert ${value} Wh (watt-hours) of energy consumption into a concise, relatable everyday comparison. 
+    
+Specifically compare it to: running a laptop (typical laptop uses 50W), charging phones, or other common devices.
+Format: Start with "≈" followed by the comparison (e.g., "≈ X min of laptop usage" or "≈ X phone charges").
+Keep it under 45 characters, use appropriate units (minutes/hours for time, count for charges), and make it easy to understand.
+Output only the comparison text, nothing else.`,
+    
+    water: `Convert ${value} L (liters) of water consumption into a concise, relatable everyday comparison.
+    
+Specifically compare it to: standard water bottles (500ml each), glasses of water, or other common water containers.
+Format: Start with "≈" followed by the comparison (e.g., "≈ X water bottles" or "≈ X glasses of water").
+Keep it under 45 characters, use whole numbers or 1 decimal place, and make it easy to understand.
+Output only the comparison text, nothing else.`,
+    
+    co2: `Convert ${value} g (grams) of CO₂ emissions into a concise, relatable everyday comparison.
+    
+Specifically compare it to: miles/kilometers driven in a typical car (average car emits ~120g CO2 per km or ~193g per mile).
+Format: Start with "≈" followed by the comparison (e.g., "≈ X km in a car" or "≈ X miles driven").
+Keep it under 45 characters, use appropriate distance units, and make it easy to understand.
+Output only the comparison text, nothing else.`
   };
 
-  const response = await fetch(CLAUDE_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': CLAUDE_API_KEY,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
+  try {
+    const requestBody = {
       model: 'claude-3-haiku-20240307',
-      max_tokens: 50,
+      max_tokens: 60,
       messages: [{
         role: 'user',
         content: prompts[type]
       }]
-    })
-  });
+    };
 
-  if (!response.ok) {
-    throw new Error(`Claude API error: ${response.status}`);
+    const response = await fetch(CLAUDE_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': CLAUDE_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Claude API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    
+    // Extract text from response - handle different possible response formats
+    let equivalencyText = '';
+    if (data.content && Array.isArray(data.content) && data.content.length > 0) {
+      if (typeof data.content[0].text === 'string') {
+        equivalencyText = data.content[0].text.trim();
+      } else if (data.content[0].type === 'text' && data.content[0].text) {
+        equivalencyText = data.content[0].text.trim();
+      }
+    }
+    
+    // Validate the response format
+    if (!equivalencyText || equivalencyText.length === 0) {
+      throw new Error('Invalid response format from Claude API');
+    }
+    
+    // Ensure it starts with ≈ for consistency
+    if (!equivalencyText.startsWith('≈') && !equivalencyText.startsWith('~')) {
+      equivalencyText = '≈ ' + equivalencyText;
+    }
+    
+    return equivalencyText;
+  } catch (error) {
+    console.error(`Claude API request failed for ${type}:`, error);
+    throw error; // Re-throw to trigger fallback
   }
-
-  const data = await response.json();
-  return data.content[0].text.trim();
 }
 
 // Local fallback equivalency calculations
+// These provide consistent, relatable comparisons when Claude API is unavailable
 function getLocalEquivalency(type, value) {
   if (type === 'energy') {
-    // Energy: 1 Wh ≈ 0.001 kWh
-    // Laptop uses ~50W, so 1 Wh = 0.02 hours = 1.2 minutes
-    const laptopMinutes = Math.round(value * 1.2);
+    // Energy: Laptop comparison
+    // Typical laptop uses ~50W (0.05 kW), so 1 Wh = 1/50 hours = 0.02 hours = 1.2 minutes
+    const laptopMinutes = value * 1.2;
+    
     if (laptopMinutes < 1) {
       return '≈ <1 min of laptop usage';
     } else if (laptopMinutes < 60) {
-      return `≈ ${laptopMinutes} min of laptop usage`;
+      // Round to nearest minute for readability
+      const minutes = Math.round(laptopMinutes);
+      return `≈ ${minutes} min of laptop usage`;
     } else {
       const hours = (laptopMinutes / 60).toFixed(1);
-      return `≈ ${hours} hours of laptop usage`;
+      // Remove trailing zero if whole number
+      const displayHours = parseFloat(hours) === parseInt(hours) ? parseInt(hours) : hours;
+      return `≈ ${displayHours} hr${displayHours === 1 ? '' : 's'} of laptop usage`;
     }
   } else if (type === 'water') {
-    // Water: 1 L = 1000 mL
-    // Standard water bottle = 500 mL
+    // Water: Water bottle comparison
+    // Standard water bottle = 500 mL (0.5 L)
+    const bottles = value / 0.5;
+    
     if (value < 0.01) {
       return '≈ a few drops';
     } else if (value < 0.05) {
       return '≈ a spoonful';
     } else if (value < 0.2) {
       return '≈ a small glass';
-    } else if (value < 0.5) {
+    } else if (bottles < 0.5) {
       return '≈ half a water bottle';
-    } else if (value < 1) {
+    } else if (bottles < 1) {
       return '≈ one water bottle';
+    } else if (bottles < 10) {
+      // Show 1 decimal place for small numbers
+      const displayBottles = bottles.toFixed(1);
+      const cleanBottles = parseFloat(displayBottles) === parseInt(displayBottles) 
+        ? parseInt(displayBottles) 
+        : displayBottles;
+      return `≈ ${cleanBottles} water bottle${cleanBottles === 1 ? '' : 's'}`;
     } else {
-      const bottles = (value / 0.5).toFixed(1);
-      return `≈ ${bottles} water bottles`;
+      // Round to whole number for larger amounts
+      const wholeBottles = Math.round(bottles);
+      return `≈ ${wholeBottles} water bottles`;
     }
   } else if (type === 'co2') {
-    // CO2: Average car emits ~120g CO2 per km
-    const km = (value / 120).toFixed(2);
-    if (km < 0.01) {
-      return '≈ <0.01 km in a car';
+    // CO2: Car driving comparison
+    // Average car emits ~120g CO2 per km (or ~193g per mile)
+    // Using metric: 120g CO2 per km
+    const km = value / 120;
+    
+    if (km < 0.001) {
+      return '≈ <0.001 km in a car';
+    } else if (km < 0.01) {
+      return `≈ ${km.toFixed(3)} km in a car`;
     } else if (km < 1) {
-      return `≈ ${km} km in a car`;
+      // Show 2-3 decimals for small distances
+      return `≈ ${km.toFixed(2)} km in a car`;
+    } else if (km < 100) {
+      // Show 1-2 decimals for medium distances
+      const displayKm = km.toFixed(1);
+      const cleanKm = parseFloat(displayKm) === parseInt(displayKm) 
+        ? parseInt(displayKm) 
+        : displayKm;
+      return `≈ ${cleanKm} km in a car`;
     } else {
-      return `≈ ${km} km in a car`;
+      // Round to whole number for large distances
+      return `≈ ${Math.round(km)} km in a car`;
     }
   }
   return '';
@@ -513,16 +548,34 @@ async function updateEquivalencies(energyWh, waterLiters, co2Grams) {
   const waterEl = document.getElementById('water-equivalency');
   const co2El = document.getElementById('co2-equivalency');
 
-  // Update all equivalencies in parallel
-  const [energyEquiv, waterEquiv, co2Equiv] = await Promise.all([
-    getEquivalency('energy', energyWh),
-    getEquivalency('water', waterLiters),
-    getEquivalency('co2', co2Grams)
-  ]);
+  try {
+    // Update all equivalencies in parallel
+    // Each getEquivalency will fallback to local calculation on error, so Promise.all is safe
+    const [energyEquiv, waterEquiv, co2Equiv] = await Promise.all([
+      getEquivalency('energy', energyWh).catch(err => {
+        console.error('Error getting energy equivalency:', err);
+        return getLocalEquivalency('energy', energyWh);
+      }),
+      getEquivalency('water', waterLiters).catch(err => {
+        console.error('Error getting water equivalency:', err);
+        return getLocalEquivalency('water', waterLiters);
+      }),
+      getEquivalency('co2', co2Grams).catch(err => {
+        console.error('Error getting CO2 equivalency:', err);
+        return getLocalEquivalency('co2', co2Grams);
+      })
+    ]);
 
-  if (energyEl) energyEl.textContent = energyEquiv;
-  if (waterEl) waterEl.textContent = waterEquiv;
-  if (co2El) co2El.textContent = co2Equiv;
+    if (energyEl) energyEl.textContent = energyEquiv || '≈ calculating...';
+    if (waterEl) waterEl.textContent = waterEquiv || '≈ calculating...';
+    if (co2El) co2El.textContent = co2Equiv || '≈ calculating...';
+  } catch (error) {
+    console.error('Error updating equivalencies:', error);
+    // Fallback to local calculations for all metrics
+    if (energyEl) energyEl.textContent = getLocalEquivalency('energy', energyWh);
+    if (waterEl) waterEl.textContent = getLocalEquivalency('water', waterLiters);
+    if (co2El) co2El.textContent = getLocalEquivalency('co2', co2Grams);
+  }
 }
 
 // Update only the impact numbers without re-rendering the whole section

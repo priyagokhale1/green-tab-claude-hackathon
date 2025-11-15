@@ -8,13 +8,11 @@ const storageKey = 'greenTabTracking';
 
 // Initialize storage and load existing tabs
 chrome.runtime.onInstalled.addListener(async () => {
-  console.log('GreenTab background script initialized');
   await initializeAllTabs();
 });
 
 // Also initialize when extension starts (service worker wakes up)
 chrome.runtime.onStartup.addListener(async () => {
-  console.log('GreenTab background script started');
   await initializeAllTabs();
 });
 
@@ -80,8 +78,6 @@ async function startTrackingTab(tabId, url) {
     domain: domain,
     startTime: Date.now()
   });
-  
-  console.log(`Started tracking tab ${tabId}: ${domain}`);
 }
 
 // Stop tracking a tab and save its time
@@ -98,7 +94,6 @@ async function stopTrackingTab(tabId) {
   }
   
   trackedTabs.delete(tabId);
-  console.log(`Stopped tracking tab ${tabId}: ${tracking.domain} (${duration}s)`);
 }
 
 // Track when a tab is created
@@ -153,7 +148,6 @@ async function saveTimeToStorage(domain, seconds) {
     data[today][domain] += seconds;
     
     await chrome.storage.local.set({ [storageKey]: data });
-    console.log(`Saved ${seconds}s for ${domain} on ${today}`);
   } catch (error) {
     console.error('Error saving to storage:', error);
   }
