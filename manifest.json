@@ -1,0 +1,25 @@
+{
+  "name": "GreenTab",
+  "description": "See the hidden environmental cost of your browsing",
+  "version": "1.0",
+  "manifest_version": 3,
+  "action": {
+    "default_popup": "hello.html",
+    "default_icon": "green_tab_logo.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*",
+    "https://api.thegreenwebfoundation.org/*",
+    "https://api.websitecarbon.com/*",
+    "https://api.anthropic.com/*"
+  ]
+}

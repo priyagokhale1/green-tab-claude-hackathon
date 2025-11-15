@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>GreenTab</title>
+  <style>
+    :root {
+      --bg: #0b1120;
+      --panel-bg: #020617;
+      --card-bg: #0f172a;
+      --accent: #22c55e;
+      --accent-soft: rgba(34, 197, 94, 0.12);
+      --danger: #f97316;
+      --danger-soft: rgba(248, 113, 113, 0.12);
+      --border-subtle: #1e293b;
+      --text-main: #e5e7eb;
+      --text-subtle: #9ca3af;
+      --radius-lg: 16px;
+      --radius-md: 999px;
+      --shadow-soft: 0 18px 45px rgba(15, 23, 42, 0.7);
+      --font-stack: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-stack);
+      background: radial-gradient(circle at top, #1e293b 0, #020617 45%, #000 100%);
+      color: var(--text-main);
+    }
+
+    /* popup container */
+    .popup {
+      width: 340px;
+      padding: 16px 16px 18px;
+      background: linear-gradient(145deg, #020617, #020617, #0b1120);
+      border-radius: 20px;
+      box-shadow: var(--shadow-soft);
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 0, #4ade80, #16a34a 60%, #14532d);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 6px 18px rgba(22, 163, 74, 0.6);
+      overflow: hidden;
+    }
+
+    .logo-circle img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .brand-name {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: #a7f3d0;
+    }
+
+    .brand-subtitle {
+      font-size: 13px;
+      color: var(--text-main);
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Courier New', monospace;
+    }
+
+    /* status pill */
+    .status-pill {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 4px 9px;
+      border-radius: var(--radius-md);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid transparent;
+    }
+
+    .status-bad {
+      color: #fed7aa;
+      background: var(--danger-soft);
+      border-color: rgba(248, 113, 113, 0.45);
+    }
+
+    .status-good {
+      color: #bbf7d0;
+      background: var(--accent-soft);
+      border-color: rgba(34, 197, 94, 0.5);
+    }
+
+    .status-loading {
+      color: var(--text-subtle);
+      background: rgba(15, 23, 42, 0.8);
+      border-color: rgba(148, 163, 184, 0.4);
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      box-shadow: 0 0 8px currentColor;
+    }
+
+    .status-good .status-dot {
+      background: var(--accent);
+    }
+
+    .status-bad .status-dot {
+      background: var(--danger);
+    }
+
+    .status-loading .status-dot {
+      background: var(--text-subtle);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .loading-spinner {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border: 2px solid rgba(148, 163, 184, 0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* session */
+    .session {
+      margin-bottom: 10px;
+    }
+
+    .session-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-subtle);
+      margin-bottom: 4px;
+    }
+
+    .session-time {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    /* card */
+    .card {
+      margin-top: 6px;
+      padding: 12px 12px 10px;
+      border-radius: var(--radius-lg);
+      background: radial-gradient(circle at top left, #0f172a, #020617 70%);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .card.loading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-subtle);
+      font-size: 12px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .card-subtitle {
+      font-size: 11px;
+      color: var(--text-subtle);
+    }
+
+    .chip {
+      font-size: 10px;
+      padding: 4px 8px;
+      border-radius: var(--radius-md);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+    }
+
+    .chip-soft {
+      background: rgba(15, 23, 42, 0.8);
+    }
+
+    /* metrics */
+    .metrics {
+      margin-top: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .metric {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 5px 6px;
+      border-radius: 10px;
+    }
+
+    .metric > div:first-child {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+    }
+
+    .metric:nth-child(1) {
+      background: radial-gradient(circle at 0 50%, rgba(234, 179, 8, 0.18), transparent);
+    }
+
+    .metric:nth-child(2) {
+      background: radial-gradient(circle at 0 50%, rgba(96, 165, 250, 0.12), transparent);
+    }
+
+    .metric:nth-child(3) {
+      background: radial-gradient(circle at 0 50%, rgba(251, 113, 133, 0.14), transparent);
+    }
+
+    .metric-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-subtle);
+    }
+
+    .metric-value {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .metric-equivalency {
+      font-size: 10px;
+      color: var(--text-subtle);
+      margin-top: 2px;
+      font-style: italic;
+    }
+
+    .metric-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+
+    .metric-dot.energy {
+      background: #facc15;
+    }
+
+    .metric-dot.water {
+      background: #38bdf8;
+    }
+
+    .metric-dot.carbon {
+      background: #fb7185;
+    }
+
+    /* footer text */
+    .card-footer {
+      margin-top: 8px;
+      font-size: 10px;
+      color: var(--text-subtle);
+    }
+  </style>
+</head>
+  <body>
+  <div class="popup">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <div class="logo-circle">
+          <img src="green_tab_logo.png" alt="GreenTab Logo" />
+        </div>
+        <div>
+          <div class="brand-name">GreenTab</div>
+          <div class="brand-subtitle" id="current-domain">Loading...</div>
+        </div>
+      </div>
+      <div id="green-hosting-status" class="status-pill status-loading">
+        <span class="status-dot"></span>
+        <span>Checking...</span>
+      </div>
+    </header>
+
+    <!-- Session info -->
+    <section class="session">
+      <div class="session-label">Today's session</div>
+      <div class="session-time" id="time-spent">Calculating...</div>
+    </section>
+
+    <!-- Impact card -->
+    <section id="impact-stats" class="card loading">
+      <span class="loading-spinner"></span>
+      <span>Calculating environmental impact...</span>
+    </section>
+  </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
