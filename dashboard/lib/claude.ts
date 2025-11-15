@@ -13,14 +13,27 @@ export async function getClaudeInsights(
     return null // Return null if API key not configured
   }
 
+  // Validate data
+  if (!dailyData || dailyData.length === 0 || !topDomains || topDomains.length === 0) {
+    return null
+  }
+
   // Prepare data summary
-  const categoryTotal = totals[category]
-  const percentChange = comparison.percentChange[category]
-  const top3Domains = topDomains.slice(0, 3).map(d => ({
-    domain: d.domain,
-    value: category === 'energy' ? d.energy_wh : category === 'water' ? d.water_liters : d.co2_grams,
-    time: `${Math.floor(d.total_seconds / 3600)}h ${Math.floor((d.total_seconds % 3600) / 60)}m`
-  }))
+  const categoryTotal = totals[category] || 0
+  const percentChange = comparison.percentChange[category] || 0
+  const top3Domains = topDomains
+    .filter(d => d && d.domain) // Filter out invalid entries
+    .slice(0, 3)
+    .map(d => ({
+      domain: d.domain,
+      value: category === 'energy' ? (d.energy_wh || 0) : category === 'water' ? (d.water_liters || 0) : (d.co2_grams || 0),
+      time: `${Math.floor((d.total_seconds || 0) / 3600)}h ${Math.floor(((d.total_seconds || 0) % 3600) / 60)}m`
+    }))
+  
+  // If no valid domains after filtering, return null
+  if (top3Domains.length === 0) {
+    return null
+  }
 
   // Calculate trend (increasing/decreasing/stable)
   const sortedData = [...dailyData].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
@@ -49,27 +62,36 @@ export async function getClaudeInsights(
   const categoryName = category === 'energy' ? 'Energy' : category === 'water' ? 'Water' : 'CO₂'
   const unit = category === 'energy' ? 'Wh' : category === 'water' ? 'L' : 'g'
 
-  const prompt = `Analyze this user's ${categoryName.toLowerCase()} usage data for the last 30 days and provide actionable insights.
+  const prompt = `Analyze this user's ${categoryName.toLowerCase()} usage data for the last 30 days and provide a brief, actionable insight.
 
 **Data Summary:**
 - Total ${categoryName} used: ${categoryTotal.toFixed(2)} ${unit}
 - Change vs. one month ago: ${percentChange > 0 ? '+' : ''}${percentChange.toFixed(1)}%
 - Trend: ${trend}
-- Top 3 domains by ${categoryName.toLowerCase()}:
-${top3Domains.map((d, i) => `  ${i + 1}. ${d.domain}: ${d.value.toFixed(2)} ${unit} (${d.time})`).join('\n')}
+- Top domains by ${categoryName.toLowerCase()}:
+${top3Domains.length > 0 ? top3Domains.map((d, i) => `  ${i + 1}. ${d.domain}: ${d.value.toFixed(2)} ${unit} (${d.time})`).join('\n') : '  No domain data available'}
 
 **Your Task:**
-Write a concise, helpful analysis (2-3 short paragraphs, max 200 words) that:
-1. Comments on the data trends (is usage increasing/decreasing/stable? what patterns do you see?)
-2. Provides relatable comparisons (e.g., "This is equivalent to...")
-3. Suggests specific, actionable alternatives:
-   - For high-energy domains, suggest lower-impact alternatives (e.g., "Instead of video streaming on ${top3Domains[0]?.domain}, consider text-based alternatives like...")
-   - Suggest greener settings or behaviors
-   - Provide website-specific recommendations when relevant
+Write a VERY concise insight (1-2 sentences max) that:
+1. Briefly comments on the trend (e.g., "Your ${categoryName.toLowerCase()} usage is ${trend} this month")
+2. Provides one relatable comparison if helpful (e.g., "That's equivalent to...")
 
-**Tone:** Friendly, encouraging, not guilt-trippy. Focus on actionable steps.
+Then provide 2-3 bulleted alternatives:
+- ${top3Domains.length > 0 ? `Suggest specific lower-impact alternatives for the top domain (e.g., "• Instead of ${top3Domains[0]?.domain}, try [alternative]")` : 'Suggest general lower-impact alternatives'}
+- Suggest one greener behavior or setting
+- Keep each bullet to one short line
 
-**Format:** Plain text, no markdown, no bullet points. Write in natural paragraphs.`
+**Tone:** Friendly, encouraging, not guilt-trippy.
+
+**Format:** 
+First line: 1-2 sentence insight
+Then: 2-3 bullet points starting with "•" for alternatives
+
+Example format:
+"Your energy usage is increasing this month. That's like charging your phone 50 times.
+• ${top3Domains.length > 0 ? `Instead of ${top3Domains[0]?.domain}, try reading articles instead of videos` : 'Try reading articles instead of watching videos'}
+• Enable dark mode to reduce energy consumption
+• Use text-based apps when possible"`
 
   try {
     const response = await fetch(CLAUDE_API_URL, {
@@ -81,7 +103,7 @@ Write a concise, helpful analysis (2-3 short paragraphs, max 200 words) that:
       },
       body: JSON.stringify({
         model: 'claude-3-haiku-20240307',
-        max_tokens: 500,
+        max_tokens: 200,
         messages: [{
           role: 'user',
           content: prompt
