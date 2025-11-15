@@ -20,6 +20,9 @@ const SUPABASE_URL = 'https://taaadgsnajjsmpidtusz.supabase.co'; // e.g., 'https
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhYWFkZ3NuYWpqc21waWR0dXN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMyMDk5ODEsImV4cCI6MjA3ODc4NTk4MX0.QKFSl_WlrGVT8Wp3RsJWrqOC3WyEPmCi54xIinydBns'; // e.g., 'your-anon-key-here'
 // If these are empty, authentication will be disabled
 
+// Dashboard URL - Update this when you deploy your dashboard
+const DASHBOARD_URL = 'http://localhost:3000'; // Local development - change to production URL when deployed
+
 // Chrome Storage Adapter for Supabase
 // This allows Supabase sessions to persist across popup/service worker restarts
 const chromeStorageAdapter = {
@@ -626,6 +629,23 @@ async function signOut() {
   }
 }
 
+// Open dashboard in new tab
+function openDashboard() {
+  if (!DASHBOARD_URL || DASHBOARD_URL === 'https://your-dashboard.vercel.app') {
+    console.warn('Dashboard URL not configured');
+    alert('Dashboard URL not configured. Please update DASHBOARD_URL in popup.js');
+    return;
+  }
+  
+  try {
+    console.log('Opening dashboard at:', DASHBOARD_URL);
+    chrome.tabs.create({ url: DASHBOARD_URL });
+  } catch (error) {
+    console.error('Error opening dashboard:', error);
+    alert('Failed to open dashboard: ' + error.message);
+  }
+}
+
 // Initialize authentication UI
 async function initAuth() {
   console.log('initAuth called');
@@ -641,6 +661,7 @@ async function initAuth() {
   // Set up event listeners
   const signInButton = document.getElementById('sign-in-button');
   const signOutButton = document.getElementById('sign-out-button');
+  const dashboardButton = document.getElementById('dashboard-button');
 
   if (signInButton) {
     signInButton.addEventListener('click', signInWithGoogle, { once: false });
@@ -663,6 +684,12 @@ async function initAuth() {
     signOutButton.addEventListener('click', signOut, { once: false });
   } else {
     console.error('sign-out-button not found');
+  }
+
+  if (dashboardButton) {
+    dashboardButton.addEventListener('click', openDashboard, { once: false });
+  } else {
+    console.error('dashboard-button not found');
   }
 
   // Initialize Supabase client if configured

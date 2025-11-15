@@ -367,6 +367,7 @@ async function syncDataToBackend() {
 
     // Transform data for backend
     const syncData = [];
+    const currentTimestamp = new Date().toISOString();
     for (const [date, domains] of Object.entries(localData)) {
       for (const [domain, seconds] of Object.entries(domains)) {
         if (seconds > 0) {
@@ -380,7 +381,8 @@ async function syncDataToBackend() {
             user_id: userId,
             energy_wh: impact.energy_wh,
             water_liters: impact.water_liters,
-            co2_grams: impact.co2_grams
+            co2_grams: impact.co2_grams,
+            synced_at: currentTimestamp
           });
         }
       }
@@ -419,7 +421,8 @@ async function syncDataToBackend() {
             total_seconds: record.total_seconds,
             energy_wh: record.energy_wh,
             water_liters: record.water_liters,
-            co2_grams: record.co2_grams
+            co2_grams: record.co2_grams,
+            synced_at: record.synced_at
           })
         });
 
@@ -477,7 +480,8 @@ async function syncDataToBackend() {
                 total_seconds: record.total_seconds,
                 energy_wh: record.energy_wh,
                 water_liters: record.water_liters,
-                co2_grams: record.co2_grams
+                co2_grams: record.co2_grams,
+                synced_at: record.synced_at
               })
             });
             if (retryPatch.ok) {

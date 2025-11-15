@@ -374,6 +374,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      gap: 8px;
       padding: 8px 0;
     }
 
@@ -382,6 +383,27 @@
       font-weight: 500;
       color: var(--text-main);
       text-align: center;
+    }
+
+    .dashboard-button {
+      padding: 6px 12px;
+      background: transparent;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: var(--font-stack);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .dashboard-button:hover {
+      background: var(--accent-soft);
+      border-color: rgba(34, 197, 94, 0.7);
     }
 
     .sign-out-button {
@@ -451,6 +473,12 @@
       <div id="auth-signed-in" class="auth-signed-in">
         <div class="auth-greeting">
           <span class="auth-greeting-text" id="auth-greeting-text">Hi there!</span>
+          <button id="dashboard-button" class="dashboard-button" title="Open Dashboard">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Dashboard
+          </button>
         </div>
         <button id="sign-out-button" class="sign-out-button">Sign out</button>
       </div>
