@@ -343,12 +343,16 @@ function stopDataSync() {
 // Sync local data to backend
 async function syncDataToBackend() {
   if (!isAuthenticated || !authToken || !SUPABASE_URL) {
-    console.log('Sync skipped: not authenticated or missing config');
+    console.log('Sync skipped: not authenticated or missing config', {
+      isAuthenticated,
+      hasToken: !!authToken,
+      hasUrl: !!SUPABASE_URL
+    });
     return;
   }
 
   try {
-    console.log('Starting data sync to backend...');
+    console.log(`[${new Date().toLocaleTimeString()}] Starting data sync to backend...`);
     
     // Get all local tracking data
     const result = await chrome.storage.local.get([storageKey]);
@@ -358,6 +362,8 @@ async function syncDataToBackend() {
       console.log('Sync skipped: no local data to sync');
       return;
     }
+    
+    console.log(`Local data found: ${Object.keys(localData).length} dates with tracking data`);
 
     // Transform data for backend
     const syncData = [];
@@ -388,39 +394,110 @@ async function syncDataToBackend() {
     console.log(`Syncing ${syncData.length} records to backend...`);
 
     // Use UPSERT for each record
-    // PostgREST upsert: POST with Prefer: resolution=merge-duplicates
-    // Must include all unique constraint columns (user_id, date, domain)
+    // For Supabase/PostgREST, we need to:
+    // 1. Try PATCH first (update existing record)
+    // 2. If 404/not found, use POST (insert new record)
     let successCount = 0;
     let errorCount = 0;
     
     // Process records one by one for better error handling
     for (const record of syncData) {
       try {
-        // POST with upsert header - will update if (user_id, date, domain) exists
-        const response = await fetch(`${SUPABASE_URL}/rest/v1/tracking_data`, {
+        // First, try to PATCH (update) existing record
+        // Use the unique constraint columns in the query
+        const patchUrl = `${SUPABASE_URL}/rest/v1/tracking_data?user_id=eq.${record.user_id}&date=eq.${record.date}&domain=eq.${encodeURIComponent(record.domain)}`;
+        
+        const patchResponse = await fetch(patchUrl, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}`,
+            'apikey': SUPABASE_ANON_KEY,
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify({
+            total_seconds: record.total_seconds,
+            energy_wh: record.energy_wh,
+            water_liters: record.water_liters,
+            co2_grams: record.co2_grams
+          })
+        });
+
+        if (patchResponse.ok) {
+          const updatedRecords = await patchResponse.json();
+          // If we updated an existing record, success
+          if (updatedRecords && updatedRecords.length > 0) {
+            successCount++;
+            continue; // Move to next record
+          }
+          // If PATCH returned 200 but empty array, record doesn't exist, try POST
+        } else if (patchResponse.status === 404) {
+          // PATCH 404 means record doesn't exist, try POST
+          console.log(`Record not found, inserting new record for ${record.domain} on ${record.date}`);
+        } else {
+          // PATCH failed with other error, log and try POST anyway
+          const patchError = await patchResponse.text();
+          console.warn(`PATCH failed for ${record.domain}, trying POST:`, patchResponse.status, patchError);
+        }
+        
+        // If PATCH didn't find a record (404 or empty), try POST (insert)
+        const postResponse = await fetch(`${SUPABASE_URL}/rest/v1/tracking_data`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${authToken}`,
             'apikey': SUPABASE_ANON_KEY,
-            'Prefer': 'resolution=merge-duplicates' // Upsert on conflict
+            'Prefer': 'return=representation'
           },
           body: JSON.stringify(record)
         });
 
-        if (response.ok) {
+        if (postResponse.ok) {
           successCount++;
         } else {
-          const errorText = await response.text();
-          console.error(`Sync failed for ${record.domain} on ${record.date}:`, response.status, errorText);
+          const errorText = await postResponse.text();
+          const status = postResponse.status;
           
-          // If it's a 404, the table might not exist or RLS is blocking
-          // If it's a 400, there might be a validation error
-          if (response.status === 404) {
-            console.error('Table might not exist or RLS policy is blocking. Check Supabase setup.');
+          // 409 Conflict = duplicate, means record exists (shouldn't happen after PATCH, but handle it)
+          // 404 = table not found or RLS blocking
+          if (status === 409) {
+            // Record exists but PATCH didn't find it (race condition?) - retry PATCH
+            console.warn(`409 Conflict for ${record.domain} on ${record.date} - record exists, retrying PATCH...`);
+            // Retry PATCH with the full URL
+            const retryPatchUrl = `${SUPABASE_URL}/rest/v1/tracking_data?user_id=eq.${record.user_id}&date=eq.${record.date}&domain=eq.${encodeURIComponent(record.domain)}`;
+            const retryPatch = await fetch(retryPatchUrl, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`,
+                'apikey': SUPABASE_ANON_KEY,
+                'Prefer': 'return=representation'
+              },
+              body: JSON.stringify({
+                total_seconds: record.total_seconds,
+                energy_wh: record.energy_wh,
+                water_liters: record.water_liters,
+                co2_grams: record.co2_grams
+              })
+            });
+            if (retryPatch.ok) {
+              const retryResult = await retryPatch.json();
+              if (retryResult && retryResult.length > 0) {
+                console.log(`✓ Retry PATCH succeeded for ${record.domain}`);
+                successCount++;
+              } else {
+                errorCount++;
+              }
+            } else {
+              errorCount++;
+            }
+          } else if (status === 404) {
+            console.error(`404: Table might not exist or RLS policy is blocking: ${record.domain} on ${record.date}`);
+            errorCount++;
+          } else {
+            console.error(`Sync failed for ${record.domain} on ${record.date}:`, status, errorText);
+            errorCount++;
           }
-          
-          errorCount++;
         }
       } catch (recordError) {
         console.error(`Error syncing record for ${record.domain}:`, recordError);
@@ -432,13 +509,17 @@ async function syncDataToBackend() {
     }
 
     if (successCount > 0) {
-      console.log(`✓ Sync complete: ${successCount} records synced, ${errorCount} failed`);
+      console.log(`✓ Sync complete: ${successCount} records synced, ${errorCount} failed at ${new Date().toLocaleTimeString()}`);
     } else if (errorCount > 0) {
-      console.error(`✗ Sync failed: ${errorCount} records failed to sync`);
+      console.error(`✗ Sync failed: ${errorCount} records failed to sync at ${new Date().toLocaleTimeString()}`);
+    } else {
+      console.log(`Sync complete: No records to sync at ${new Date().toLocaleTimeString()}`);
     }
 
-    // Mark as synced
-    await chrome.storage.local.set({ lastSyncAt: Date.now() });
+    // Mark as synced with timestamp
+    const syncTimestamp = Date.now();
+    await chrome.storage.local.set({ lastSyncAt: syncTimestamp });
+    console.log(`Last sync timestamp saved: ${new Date(syncTimestamp).toLocaleTimeString()}`);
   } catch (error) {
     console.error('Error syncing data to backend:', error);
     // Don't throw - allow local storage to continue working
